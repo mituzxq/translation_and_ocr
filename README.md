@@ -1,5 +1,6 @@
 # translation_and_ocr
 该脚本通过Tesseract-OCR和argostranslate实现在本地无网络的环境下截图ocr提取文字和截图翻译功能</br>
+支持中英互译和ocr功能，有其他语言需求自行修改代码 </br>
 注意事项： </br>
 使用该脚本需要安装Tesseract-OCR（文字识别包）和argostranslate（翻译包） </br>
 Tesseract-OCR语言文件下载地址：https://github.com/tesseract-ocr/tessdata  文件后缀为.traineddata</br>
