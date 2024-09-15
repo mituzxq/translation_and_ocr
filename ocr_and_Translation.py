@@ -20,11 +20,8 @@ translation_cache = {}
 
 def initialize_libraries():
     global installed_languages
-    try:
-        installed_languages = argostranslate.translate.get_installed_languages()
-        pytesseract.image_to_string(Image.new('RGB', (10, 10)))
-    except Exception as e:
-        print(f"Initialization error: {e}")
+    installed_languages = argostranslate.translate.get_installed_languages()
+    pytesseract.image_to_string(Image.new('RGB', (10, 10)))
 
 def preprocess_image(image):
     gray_image = image.convert('L')
@@ -43,26 +40,23 @@ def cached_ocr(img, lang):
     return text
 
 async def translate_text(text, from_lang_code, to_lang_code):
-    try:
-        if from_lang_code == to_lang_code:
-            return text
+    if from_lang_code == to_lang_code:
+        return text
 
-        def get_language(lang_code):
-            return next((lang for lang in installed_languages if lang.code == lang_code), None)
+    def get_language(lang_code):
+        return next((lang for lang in installed_languages if lang.code == lang_code), None)
 
-        from_lang = get_language(from_lang_code)
-        to_lang = get_language(to_lang_code)
+    from_lang = get_language(from_lang_code)
+    to_lang = get_language(to_lang_code)
 
-        if not from_lang or not to_lang:
-            return "Translation failed: Language package not found."
+    if not from_lang or not to_lang:
+        return "Translation failed: Language package not found."
 
-        if (from_lang_code, to_lang_code) in [('zh', 'en'), ('en', 'zh')]:
-            translated_text = from_lang.get_translation(to_lang).translate(text)
-            return translated_text
-        else:
-            return "Translation only supported between Chinese and English."
-    except Exception as e:
-        return f"Translation error: {e}"
+    if (from_lang_code, to_lang_code) in [('zh', 'en'), ('en', 'zh')]:
+        translated_text = from_lang.get_translation(to_lang).translate(text)
+        return translated_text
+    else:
+        return "Translation only supported between Chinese and English."
 
 def translate_worker(text, from_lang_code, to_lang_code, result, index):
     translated_text = asyncio.run(translate_text(text, from_lang_code, to_lang_code))
@@ -85,6 +79,7 @@ def translate_in_parallel(texts, from_lang_code, to_lang_code):
 def take_screenshot():
     root = tk.Tk()
     root.withdraw()
+    lock = threading.Lock()
 
     def on_mouse_down(event):
         global rect, start_x, start_y
@@ -100,7 +95,8 @@ def take_screenshot():
             min(start_x, event.x), min(start_y, event.y),
             abs(event.x - start_x), abs(event.y - start_y)
         ))
-        queue.put(img)
+        screenshot_queue.put(img)
+        selection_root.quit()
         selection_root.destroy()
 
     selection_root = Toplevel(root)
@@ -121,10 +117,10 @@ def take_screenshot():
     root.destroy()
 
 def display_options_from_queue():
-    while not queue.empty():
-        img = queue.get()
+    while not screenshot_queue.empty():
+        img = screenshot_queue.get()
         threading.Thread(target=show_options, args=(img,), daemon=True).start()
-    root.after(100, display_options_from_queue)
+    root.after(1000, display_options_from_queue)
 
 def show_options(img):
     options_root = Toplevel(root)
@@ -161,37 +157,31 @@ def show_options(img):
 
     def retake():
         options_root.destroy()
-        threading.Thread(target=take_screenshot, daemon=True).start()
+        take_screenshot()
 
     async def extract_text():
-        try:
-            preprocessed_img = preprocess_image(img)
-            text = await asyncio.to_thread(cached_ocr, preprocessed_img, 'chi_sim+chi_tra+eng')
-            show_text_window(text, "提取的文字", options_root.winfo_width())
-        except Exception as e:
-            show_text_window(f"Error extracting text: {e}", "错误", options_root.winfo_width())
+        preprocessed_img = preprocess_image(img)
+        text = await asyncio.to_thread(cached_ocr, preprocessed_img, 'chi_sim+chi_tra+eng')
+        show_text_window(text, "提取的文字", options_root.winfo_width())
 
     async def translate():
-        try:
-            from_lang_code = LANGUAGES[from_lang_var.get()]
-            to_lang_code = LANGUAGES[to_lang_var.get()]
+        from_lang_code = LANGUAGES[from_lang_var.get()]
+        to_lang_code = LANGUAGES[to_lang_var.get()]
 
-            preprocessed_img = preprocess_image(img)
-            text = await asyncio.to_thread(cached_ocr, preprocessed_img, 'chi_sim+chi_tra+eng')
-            
-            texts = text.split('\n')
-            translated_texts = translate_in_parallel(texts, from_lang_code, to_lang_code)
-            translated_text = '\n'.join(translated_texts)
-            
-            show_text_window(translated_text, "翻译结果", options_root.winfo_width())
-        except Exception as e:
-            show_text_window(f"Error translating text: {e}", "错误", options_root.winfo_width())
+        preprocessed_img = preprocess_image(img)
+        text = await asyncio.to_thread(cached_ocr, preprocessed_img, 'chi_sim+chi_tra+eng')
+        
+        texts = text.split('\n')
+        translated_texts = translate_in_parallel(texts, from_lang_code, to_lang_code)
+        translated_text = '\n'.join(translated_texts)
+        
+        show_text_window(translated_text, "翻译结果", options_root.winfo_width())
 
     def show_text_window(text, title, parent_width):
         text_window = Toplevel(root)
         text_window.title(title)
         
-        text_window.geometry(f"{parent_width}x200")
+        text_window.geometry(f"{parent_width}x500")
 
         text_area = tk.Text(text_window, wrap="word")
         text_area.pack(expand=True, fill="both")
@@ -206,6 +196,8 @@ def show_options(img):
         copy_button = tk.Button(text_window, text="复制到剪贴板", command=copy_and_close)
         copy_button.pack(pady=10)
 
+        text_window.protocol("WM_DELETE_WINDOW", copy_and_close)
+
     def save():
         file_path = filedialog.asksaveasfilename(
             defaultextension=".png", initialfile=str(uuid.uuid4())[:8],
@@ -214,8 +206,10 @@ def show_options(img):
         if file_path:
             img.save(file_path)
             print(f"Image saved to {file_path}.")
+            cancel()
 
     def cancel():
+        screenshot_queue.queue.clear()
         options_root.destroy()
 
     button_frame = tk.Frame(options_root)
@@ -235,10 +229,12 @@ def show_options(img):
     y = (options_root.winfo_screenheight() // 2) - (height // 2)
     options_root.geometry(f"+{x}+{y}")
 
-def listen_for_screenshot():
-    keyboard.add_hotkey('ctrl+alt+w', lambda: threading.Thread(target=take_screenshot, daemon=True).start())
+    options_root.protocol("WM_DELETE_WINDOW", lambda: cancel())
 
-queue = queue.Queue()
+def listen_for_screenshot():
+    keyboard.add_hotkey('ctrl+alt+w', lambda: take_screenshot())
+
+screenshot_queue = queue.Queue()
 
 root = tk.Tk()
 root.withdraw()
